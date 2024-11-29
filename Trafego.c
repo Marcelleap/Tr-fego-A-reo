@@ -1,28 +1,35 @@
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <unistd.h>
-#include <sys/wait.h>
-#include <time.h>
-#include <signal.h>
+// Codigo desenvolvido pelos alunos João Henrique e Marcelle Andrade 
+// para a disciplina de Sistemas Operacionais 2024.1
+// Professor: João Carlos Gasparelli
+// Arquivo: Trafego.c
 
-// Defines com o número máximo de aviões, tempo de pouso e decolagem
-#define MAX_AVIOES_AEROPORTO 3
-#define TEMPO_POUSO 5 // Tempo que o avião fica parado no aeroporto
-#define TEMPO_DECOLAGEM 3 // Tempo que o avião fica no ar
+// Bibliotecas
+#include <stdio.h>        // Biblioteca para entrada e saída de dados
+#include <string.h>       // Biblioteca para manipulação de strings
+#include <stdlib.h>       // Biblioteca para funções de alocação de memória
+#include <unistd.h>       // Biblioteca para funções de sistema
+#include <sys/wait.h>     // Biblioteca para funções de espera de processos
+#include <time.h>         // Biblioteca para funções de tempo
+#include <signal.h>       // Biblioteca para manipulação de sinais
+#include <pthread.h>      // Biblioteca para manipulação de threads
+
+// Defines com o número máximo 
+#define MAX_AVIOES_AEROPORTO 3  // Número máximo de aviões no aeroporto
+#define TEMPO_POUSO 5          // Tempo que o avião fica parado no aeroporto
+#define TEMPO_DECOLAGEM 3      // Tempo que o avião fica no ar
 
 // Enum para definir os estados do avião
 typedef enum {
-    DECOLANDO,
-    POUSANDO,
-    PARADO,
-    VOANDO,
+    DECOLANDO,              // Estado do avião ao decolar
+    POUSANDO,               // Estado do avião ao pousar
+    PARADO,                 // Estado do avião parado
+    VOANDO,                 // Estado do avião voando
 } Estado;
 
 // Estrutura para definir os dados do avião
 typedef struct
 {
-    int id;
+    int id;         
     float latitude;
     float longitude;
     int altitude;
@@ -31,12 +38,23 @@ typedef struct
 
 } Trafego;
 
+typedef struct {
+    int contador_pousos;
+    int contador_decolagens;
+} ThreadArgs;
+
 // Funções
 void aviao(int readfd, int writefd);
 void requisicao(int readfd, int writefd);
-void handle_sigint(int sig);// interrupção do usuário
+void handle_sigint(int sig);   // interrupção do usuário
+void* thread_function(void* args); // Função da thread  
+
 // Variáveis globais
 FILE *arquivo = NULL;
+pthread_t monitor_thread;
+pthread_mutex_t contador_mutex = PTHREAD_MUTEX_INITIALIZER;
+int total_pousos = 0;
+int total_decolagens = 0;
 
 // Função principal
 int main() {
@@ -45,6 +63,7 @@ int main() {
     int pipecontrole[2];      // Processamento de torre → avião
     srand(time(NULL)); // Gera números aleatórios com base no tempo
     signal(SIGINT, handle_sigint); // Gerenciamento de interrupções (CTRL + C)
+    iniciar_contador();
 
     // Para criar o processo do avião
     if (pipe(piperequisicao) < 0 || pipe(pipecontrole) < 0) {
@@ -58,7 +77,7 @@ int main() {
         exit(1);
     }
 
-    if (torre == 0) {  // Processo filho: Torre de Controle
+    if (torre == 0) {  // Torre de Controle 1 
         // Torre fecha as extremidades que não vai usar
         close(piperequisicao[1]);
         close(pipecontrole[0]);
@@ -73,6 +92,7 @@ int main() {
         // Espera todos os processos acabarem
         while (wait(NULL) > 0);
     } 
+    
     else {  // Processo pai: Criador dos aviões
         // Pai fecha as extremidades que não vai usar
         close(piperequisicao[0]);
@@ -81,18 +101,18 @@ int main() {
         // Cria os processos dos aviões
         for (int i = 0; i < MAX_AVIOES_AEROPORTO * 2; i++) {
             if (fork() == 0) {  // Processo avião
-                aviao(pipecontrole[0], piperequisicao[1]);
-                close(pipecontrole[0]);
-                close(piperequisicao[1]);
-                exit(0);
+                aviao(pipecontrole[0], piperequisicao[1]);      // Executa a função aviao
+                close(pipecontrole[0]);                          // Fecha o descritor           
+                close(piperequisicao[1]);                        // Fecha o descritor
+                exit(0);                                        // Encerra o processo
             }
         }
 
         // Fecha os descritores após criar todos os aviões
-        close(pipecontrole[0]);
-        close(piperequisicao[1]);
+        close(pipecontrole[0]);                                  // Fecha o descritor
+        close(piperequisicao[1]);                                // Fecha o descritor
 
-        // Espera todos os processos acabarem
+        // Aguarda todos os processos filhos terminarem
         while (wait(NULL) > 0);
     }
 
@@ -172,7 +192,7 @@ void aviao(int readfd, int writefd) {
 
 // Função que simula a torre recebendo e processando a solicitação do avião
 void requisicao(int readfd, int writefd) {
-    arquivo = fopen("avioes_pipe.csv", "w");  // Abre o arquivo
+    arquivo = fopen("avioes_pipe.csv", "w");
     if (arquivo == NULL) {
         perror("Erro ao criar o arquivo");
         exit(1);
@@ -184,7 +204,7 @@ void requisicao(int readfd, int writefd) {
     Trafego aviao;
 
     // Quantidade de bytes lido no read abaixo (para determinar erros)
-    ssize_t bytesRead;
+    size_t bytesRead;
 
     // Contador de aviões no aeroporto
     int avioes_no_aeroporto = 0;
@@ -237,6 +257,16 @@ void requisicao(int readfd, int writefd) {
 
         // Aguarda 10 segundos antes de processar a próxima solicitação
         sleep(10);
+
+        if (aviao.estado == VOANDO && strcmp(aviao.permissao, "Aprovado") == 0) {
+            pthread_mutex_lock(&contador_mutex);
+            total_pousos++;
+            pthread_mutex_unlock(&contador_mutex);
+        } else if (aviao.estado == PARADO && strcmp(aviao.permissao, "Aprovado") == 0) {
+            pthread_mutex_lock(&contador_mutex);
+            total_decolagens++;
+            pthread_mutex_unlock(&contador_mutex);
+        }
     }
 
     // Verificação de erro
@@ -245,11 +275,48 @@ void requisicao(int readfd, int writefd) {
     }
 }
 
+// Função que monitora as estatísticas do aeroporto
+void* thread_function(void* args) {
+    ThreadArgs* threadArgs = (ThreadArgs*)args; // Argumentos da thread
+    
+    while(1) {
+        pthread_mutex_lock(&contador_mutex); // Bloqueia o acesso ao contador
+        
+        // Imprime estatísticas do aeroporto
+        printf("\n=== Estatísticas do Aeroporto ===\n");
+        printf("Total de pousos: %d\n", total_pousos);
+        printf("Total de decolagens: %d\n", total_decolagens);
+        printf("================================\n\n");
+        
+        pthread_mutex_unlock(&contador_mutex); // Desbloqueia o acesso ao contador
+        sleep(15);                  // Atualiza as estatísticas a cada 15 segundos
+    }
+    return NULL; // Retorna NULL
+}
+
 // Handle no caso de interrupção (CTRL + C)
 void handle_sigint(int sig) {
     if (arquivo != NULL) {
+        // Adiciona uma linha em branco para separar os dados das estatísticas
+        fprintf(arquivo, "\n=== Estatísticas Finais ===\n");
+        fprintf(arquivo, "Total de pousos realizados,%d\n", total_pousos);
+        fprintf(arquivo, "Total de decolagens realizadas,%d\n", total_decolagens);
+        
         fclose(arquivo);
-        printf("Arquivo 'avioes_pipe.csv' fechado com sucesso.\n");
+        printf("\nEstatísticas gravadas e arquivo 'avioes_pipe.csv' fechado com sucesso.\n");
     }
     exit(0);
+}
+
+// Adicione esta função após a main() para iniciar a thread
+void iniciar_contador() {
+    ThreadArgs* args = malloc(sizeof(ThreadArgs));       // Aloca memória para os argumentos da thread
+    args->contador_pousos = 0;                                // Parâmetro 1
+    args->contador_decolagens = 0;                                // Parâmetro 2
+    
+    // Cria a thread
+    if (pthread_create(&monitor_thread, NULL, thread_function, args) != 0) {
+        perror("Erro ao criar thread de monitoramento"); // Erro ao criar a thread
+        exit(1); //Encerra o processp
+    }
 }
