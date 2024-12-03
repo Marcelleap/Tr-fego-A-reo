@@ -50,6 +50,7 @@ void aviao(int readfd, int writefd);
 void requisicao(int readfd, int writefd);
 void handle_sigint(int sig);       // interrupção do usuário
 void *thread_function(void *args); // Função da thread
+void iniciar_contador();
 
 // Variáveis globais
 FILE *arquivo = NULL;
@@ -57,6 +58,7 @@ pthread_t monitor_thread;
 pthread_mutex_t contador_mutex = PTHREAD_MUTEX_INITIALIZER;
 int total_pousos = 0;
 int total_decolagens = 0;
+volatile sig_atomic_t should_terminate = 0;
 
 // Função principal
 int main()
@@ -66,7 +68,6 @@ int main()
     int pipecontrole[2];           // Processamento de torre → avião
     srand(time(NULL));             // Gera números aleatórios com base no tempo
     signal(SIGINT, handle_sigint); // Gerenciamento de interrupções (CTRL + C)
-    iniciar_contador();
 
     // Para criar o processo do avião
     if (pipe(piperequisicao) < 0 || pipe(pipecontrole) < 0)
@@ -84,6 +85,8 @@ int main()
 
     if (torre == 0)
     { // Torre de Controle 0
+        iniciar_contador();
+
         // Torre fecha as extremidades que não vai usar
         close(piperequisicao[1]);
         close(pipecontrole[0]);
@@ -96,8 +99,7 @@ int main()
         close(pipecontrole[1]);
 
         // Espera todos os processos acabarem
-        while (wait(NULL) > 0)
-            ;
+        while (wait(NULL) > 0);
     }
 
     else
@@ -123,8 +125,7 @@ int main()
         close(piperequisicao[1]); // Fecha o descritor
 
         // Aguarda todos os processos filhos terminarem
-        while (wait(NULL) > 0)
-            ;
+        while (wait(NULL) > 0);
     }
 
     return 0;
@@ -195,16 +196,16 @@ void aviao(int readfd, int writefd)
                 printf("Avião %d ficará parado por %d segundos\n\n", aviao.id, tempo_parado);
                 sleep(tempo_parado);
             }
-            // Procedimento caso negado
         }
+        // Procedimento caso negado
         else
         {
             // Procedimento caso negado e estiver voando
             if (aviao.estado == VOANDO)
             {
                 printf("Avião %d aguardando novo pedido para pouso...\n\n", aviao.id);
-                // Procedimento caso negado e estiver parado
             }
+            // Procedimento caso negado e estiver parado
             else if (aviao.estado == PARADO)
             {
                 printf("Avião %d aguardando novo pedido para decolagem...\n\n", aviao.id);
@@ -234,36 +235,34 @@ void requisicao(int readfd, int writefd)
 
     // Contador de aviões no aeroporto
     int avioes_no_aeroporto = 0;
-    // Variável para verificar se a pista está em uso
-    int pista_em_uso = 0;
 
     while ((bytesRead = read(readfd, &aviao, sizeof(Trafego))) > 0)
     {
         printf("Torre recebeu solicitação de %s do avião %d\n", aviao.estado == VOANDO ? "pouso" : "decolagem", aviao.id);
 
-        // Procedimento caso a pista estiver em uso
-        if (pista_em_uso)
-        {
-            printf("Torre: Pista ocupada. Avião %d deve aguardar.\n", aviao.id);
-            // Procedimento caso a torre receber uma mensagem de um avião voando
-        }
-        else if (aviao.estado == VOANDO)
+        // Procedimento caso a torre receber uma mensagem de um avião voando
+        if (aviao.estado == VOANDO)
         {
             // Procedimento caso o aeroporto não estiver lotado
             if (avioes_no_aeroporto < MAX_AVIOES_AEROPORTO)
             {
                 snprintf(aviao.permissao, sizeof(aviao.permissao), "Aprovado");
-                pista_em_uso = 1;
                 avioes_no_aeroporto++;
                 printf("Torre: Pouso autorizado para avião %d. Aviões no aeroporto: %d\n",
                        aviao.id, avioes_no_aeroporto);
             }
-            // Procedimento caso a torre receber uma mensagem de um avião parado
+            // Procedimento caso o aeroporto estiver lotado
+            else
+            {
+                snprintf(aviao.permissao, sizeof(aviao.permissao), "Negado");
+                printf("Torre: Pouso negado para avião %d. Aeroporto lotado.2 Aviões no aeroporto: %d\n",
+                       aviao.id, avioes_no_aeroporto);
+            }
         }
+        // Procedimento caso a torre receber uma mensagem de um avião parado
         else if (aviao.estado == PARADO)
         {
             snprintf(aviao.permissao, sizeof(aviao.permissao), "Aprovado");
-            pista_em_uso = 1;
             avioes_no_aeroporto--;
             printf("Torre: Decolagem autorizada para avião %d. Aviões no aeroporto: %d\n",
                    aviao.id, avioes_no_aeroporto);
@@ -286,13 +285,9 @@ void requisicao(int readfd, int writefd)
         // Libera a pista
         if (strcmp(aviao.permissao, "Aprovado") == 0)
         {
-            pista_em_uso = 0;
             printf("Torre: Pista liberada\n\n");
         }
-
-        // Aguarda 10 segundos antes de processar a próxima solicitação
-        sleep(10);
-
+        
         if (aviao.estado == VOANDO && strcmp(aviao.permissao, "Aprovado") == 0)
         {
             pthread_mutex_lock(&contador_mutex);
@@ -305,6 +300,9 @@ void requisicao(int readfd, int writefd)
             total_decolagens++;
             pthread_mutex_unlock(&contador_mutex);
         }
+
+        // Aguarda 10 segundos antes de processar a próxima solicitação
+        sleep(5);
     }
 
     // Verificação de erro
@@ -319,25 +317,31 @@ void *thread_function(void *args)
 {
     ThreadArgs *threadArgs = (ThreadArgs *)args; // Argumentos da thread
 
-    while (1)
+    while (!should_terminate)
     {
         pthread_mutex_lock(&contador_mutex); // Bloqueia o acesso ao contador
-
+        
         // Imprime estatísticas do aeroporto
+        threadArgs->contador_pousos = total_pousos;
+        threadArgs->contador_decolagens = total_decolagens;
+        
         printf("\n=== Estatísticas do Aeroporto ===\n");
-        printf("Total de pousos: %d\n", total_pousos);
-        printf("Total de decolagens: %d\n", total_decolagens);
+        printf("Total de pousos: %d\n", threadArgs->contador_pousos);
+        printf("Total de decolagens: %d\n", threadArgs->contador_decolagens);
         printf("================================\n\n");
-
+        
         pthread_mutex_unlock(&contador_mutex); // Desbloqueia o acesso ao contador
-        sleep(15);                             // Atualiza as estatísticas a cada 15 segundos
+        sleep(10); // Aguarda 10 segundos antes de imprimir as estatísticas novamente
     }
+    free(args);
     return NULL; // Retorna NULL
 }
 
 // Handle no caso de interrupção (CTRL + C)
 void handle_sigint(int sig)
 {
+    should_terminate = 1;
+    
     if (arquivo != NULL)
     {
         // Adiciona uma linha em branco para separar os dados das estatísticas
@@ -348,6 +352,9 @@ void handle_sigint(int sig)
         fclose(arquivo);
         printf("\nEstatísticas gravadas e arquivo 'avioes_pipe.csv' fechado com sucesso.\n");
     }
+
+    pthread_join(monitor_thread, NULL);
+    pthread_mutex_destroy(&contador_mutex);
     exit(0);
 }
 
@@ -362,6 +369,7 @@ void iniciar_contador()
     if (pthread_create(&monitor_thread, NULL, thread_function, args) != 0)
     {
         perror("Erro ao criar thread de monitoramento"); // Erro ao criar a thread
-        exit(1);                                         // Encerra o processp
+        free(args);                                      // Libera a memória alocada
+        exit(1);                                         // Encerra o processo
     }
 }
