@@ -1,6 +1,6 @@
 // Codigo desenvolvido pelos alunos João Henrique e Marcelle Andrade
 // para a disciplina de Sistemas Operacionais 2024.2
-// Professor: João Carlos Gasparelli
+// Professor: João Carlos 
 // Arquivo: Trafego.c
 
 // Bibliotecas
