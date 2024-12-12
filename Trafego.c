@@ -103,7 +103,7 @@ int main()
     }
 
     else
-    { // Processo pai: Criador dos aviões
+    { // Processo filho: Criador dos aviões
         // Pai fecha as extremidades que não vai usar
         close(piperequisicao[0]);
         close(pipecontrole[1]);
