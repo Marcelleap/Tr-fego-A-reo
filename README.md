@@ -16,13 +16,11 @@ O sistema simula o controle de tráfego aéreo com as seguintes características
 - Limite máximo de 3 aviões simultâneos no aeroporto
 
 ## 🚀 Funcionalidades
-
-- Simulação de múltiplos aviões usando processos
-- Comunicação entre torre e aviões através de pipes
-- Thread dedicada para monitoramento de estatísticas
-- Controle de acesso à pista usando mutex
-- Registro de operações em arquivo CSV
-- Tratamento de sinais para encerramento seguro
+- Registro de pousos e decolagens.
+- Tratamento de sinais de interrupção (SIGINT).
+- Escrita de dados e estatísticas finais em arquivo CSV.
+- Utilização de *threads* para monitoramento paralelo.
+- Controle de acesso simultâneo com *mutex*
 
 ## 🛠️ Tecnologias Utilizadas
 
@@ -39,19 +37,13 @@ O sistema simula o controle de tráfego aéreo com as seguintes características
 - Sistema operacional Linux/Unix
 - Biblioteca pthread
 
-## 🔧 Compilação
+## 🔧 Prrincipais Funções 
 
-Para compilar o programa, execute:
-```bash
-gcc Trafego.c -o trafego -pthread
-```
-
-## 🏃‍♂️ Execução
-
-Para executar o programa:
-```bash
-./trafego
-``` 
+1.void aviao (int readfd, int writefd)
+2.void requisicao(int readfd, int writefd)
+3.void handle_sigint(int sig)
+4.void thread_funcao(void *args)
+5.void iniciar_contador()
 
 ## 🎮 Controles
 
